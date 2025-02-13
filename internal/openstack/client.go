@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
@@ -192,51 +193,45 @@ func (c *ClientSet) EnsurePortsForVirtualMachine(ctx context.Context, vm *object
 
 		var port *ports.Port
 		if len(portList) == 0 {
-			var ips []ports.IP
-			if mapping.IPAddress == nil {
-				ips = []ports.IP{
-					{
-						SubnetID: mapping.SubnetID.String(),
-					},
-				}
-			} else {
-				ips = []ports.IP{
-					{
-						SubnetID:  mapping.SubnetID.String(),
-						IPAddress: mapping.IPAddress.String(),
-					},
-				}
+			// added createOpts to handle unmanaged networks
+			// if IPAM is off, our request shouldn't contain
+			// ANYTHING BUT the network ID and MAC address.
+			createOpts := ports.CreateOpts{
+				NetworkID:  mapping.NetworkID.String(),
+				MACAddress: card.MacAddress,
 			}
 
-			opts := ctx.Value("portCreateOpts").(*PortCreateOpts)
-			port, err = ports.Create(ctx, c.Networking, ports.CreateOpts{
-				NetworkID:      mapping.NetworkID.String(),
-				Name:           card.DeviceInfo.GetDescription().Label,
-				Description:    card.DeviceInfo.GetDescription().Summary,
-				MACAddress:     card.MacAddress,
-				FixedIPs:       ips,
-				SecurityGroups: opts.SecurityGroups,
-			}).Extract()
+			unmanaged := mapping.SubnetID == uuid.Nil
+
+			// continue adding to createOpts if net is managed
+			if !unmanaged {
+				var ips []ports.IP
+				if mapping.IPAddress == nil {
+					ips = []ports.IP{{SubnetID: mapping.SubnetID.String()}}
+				} else {
+					ips = []ports.IP{{SubnetID: mapping.SubnetID.String(), IPAddress: mapping.IPAddress.String()}}
+				}
+				opts := ctx.Value("portCreateOpts").(*PortCreateOpts)
+				createOpts.FixedIPs = ips
+				createOpts.SecurityGroups = opts.SecurityGroups
+				createOpts.Name = card.DeviceInfo.GetDescription().Label
+				createOpts.Description = card.DeviceInfo.GetDescription().Summary
+			}
+
+			port, err = ports.Create(ctx, c.Networking, createOpts).Extract()
 			if err != nil {
 				return nil, err
 			}
 
-			log.WithFields(log.Fields{
-				"port": port.ID,
-			}).Info("Port created")
+			log.WithFields(log.Fields{"port": port.ID}).Info("Port created")
 		} else if len(portList) == 1 {
 			port = &portList[0]
-
-			log.WithFields(log.Fields{
-				"port": port.ID,
-			}).Info("Port already exists")
+			log.WithFields(log.Fields{"port": port.ID}).Info("Port already exists")
 		} else {
 			return nil, errors.New("multiple ports found")
 		}
 
-		networks = append(networks, servers.Network{
-			Port: port.ID,
-		})
+		networks = append(networks, servers.Network{Port: port.ID})
 	}
 
 	return networks, nil

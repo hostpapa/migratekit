@@ -29,6 +29,7 @@ func (m *NetworkMappingFlag) String() string {
 
 func (m *NetworkMappingFlag) Set(value string) error {
 	mapping := NetworkMapping{}
+	unmanaged := false
 
 	for _, part := range strings.Split(value, ",") {
 		kv := strings.Split(part, "=")
@@ -66,23 +67,33 @@ func (m *NetworkMappingFlag) Set(value string) error {
 		}
 	}
 
+	if mapping.SubnetID == uuid.Nil && mapping.IPAddress == nil {
+		unmanaged = true
+	}
+
 	if mapping.MACAddr == nil {
 		return fmt.Errorf("missing MAC address in network mapping: %s", value)
-	}
-
-	if mapping.NetworkID == uuid.Nil {
-		return fmt.Errorf("missing network ID in network mapping: %s", value)
-	}
-
-	if mapping.SubnetID == uuid.Nil {
-		return fmt.Errorf("missing subnet ID in network mapping: %s", value)
 	}
 
 	if m.Mappings == nil {
 		m.Mappings = make(map[string]NetworkMapping)
 	}
 
-	m.Mappings[mapping.MACAddr.String()] = mapping
+	if unmanaged {
+		// unmanaged
+		m.Mappings[mapping.MACAddr.String()] = NetworkMapping{
+			MACAddr:   mapping.MACAddr,
+			NetworkID: mapping.NetworkID,
+			SubnetID:  uuid.Nil, // omit subnet ID
+			IPAddress: nil,      // omit IP address
+		}
+	} else {
+		if mapping.SubnetID == uuid.Nil {
+			return fmt.Errorf("missing subnet ID in network mapping: %s", value)
+		}
+		m.Mappings[mapping.MACAddr.String()] = mapping
+	}
+
 	return nil
 }
 
