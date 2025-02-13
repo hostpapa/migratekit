@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -175,6 +176,8 @@ func (c *ClientSet) EnsurePortsForVirtualMachine(ctx context.Context, vm *object
 
 		mapping, ok := networkMappings.Mappings[card.MacAddress]
 		if !ok {
+			fmt.Printf("MAC from VM: %s\n", card.MacAddress)
+			fmt.Printf("Mappings: %+v\n", networkMappings.Mappings)
 			return nil, errors.New("no network mapping found for MAC address")
 		}
 
