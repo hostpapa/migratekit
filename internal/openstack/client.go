@@ -169,21 +169,25 @@ func (c *ClientSet) EnsurePortsForVirtualMachine(ctx context.Context, vm *object
 	}
 
 	var networks []servers.Network
+	// Create map of cards by MAC for easier lookup
+	cardsByMAC := make(map[string]types.BaseVirtualEthernetCard)
 	nics := devices.SelectByType((*types.VirtualEthernetCard)(nil))
-
 	for _, nic := range nics {
 		card := nic.(types.BaseVirtualEthernetCard).GetVirtualEthernetCard()
+		cardsByMAC[card.MacAddress] = nic.(types.BaseVirtualEthernetCard)
+	}
 
-		mapping, ok := networkMappings.Mappings[card.MacAddress]
-		if !ok {
-			fmt.Printf("MAC from VM: %s\n", card.MacAddress)
-			fmt.Printf("Mappings: %+v\n", networkMappings.Mappings)
-			return nil, errors.New("no network mapping found for MAC address")
+	for macAddr, mapping := range networkMappings.Mappings {
+		card, exists := cardsByMAC[macAddr]
+		if !exists {
+			fmt.Printf("MAC from mapping: %s\n", macAddr)
+			fmt.Printf("Available cards: %+v\n", cardsByMAC)
+			return nil, fmt.Errorf("no NIC found for mapped MAC address: %s", macAddr)
 		}
 
 		pages, err := ports.List(c.Networking, ports.ListOpts{
 			NetworkID:  mapping.NetworkID.String(),
-			MACAddress: card.MacAddress,
+			MACAddress: macAddr,
 		}).AllPages(ctx)
 		if err != nil {
 			return nil, err
@@ -196,17 +200,12 @@ func (c *ClientSet) EnsurePortsForVirtualMachine(ctx context.Context, vm *object
 
 		var port *ports.Port
 		if len(portList) == 0 {
-			// added createOpts to handle unmanaged networks
-			// if IPAM is off, our request shouldn't contain
-			// ANYTHING BUT the network ID and MAC address.
 			createOpts := ports.CreateOpts{
 				NetworkID:  mapping.NetworkID.String(),
-				MACAddress: card.MacAddress,
+				MACAddress: macAddr,
 			}
 
 			unmanaged := mapping.SubnetID == uuid.Nil
-
-			// continue adding to createOpts if net is managed
 			if !unmanaged {
 				var ips []ports.IP
 				if mapping.IPAddress == nil {
@@ -217,15 +216,14 @@ func (c *ClientSet) EnsurePortsForVirtualMachine(ctx context.Context, vm *object
 				opts := ctx.Value("portCreateOpts").(*PortCreateOpts)
 				createOpts.FixedIPs = ips
 				createOpts.SecurityGroups = opts.SecurityGroups
-				createOpts.Name = card.DeviceInfo.GetDescription().Label
-				createOpts.Description = card.DeviceInfo.GetDescription().Summary
+				createOpts.Name = card.GetVirtualEthernetCard().DeviceInfo.GetDescription().Label
+				createOpts.Description = card.GetVirtualEthernetCard().DeviceInfo.GetDescription().Summary
 			}
 
 			port, err = ports.Create(ctx, c.Networking, createOpts).Extract()
 			if err != nil {
 				return nil, err
 			}
-
 			log.WithFields(log.Fields{"port": port.ID}).Info("Port created")
 		} else if len(portList) == 1 {
 			port = &portList[0]
